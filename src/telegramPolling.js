@@ -7,24 +7,20 @@ class TelegramBotPolling {
    * Handles polling against the Telegram servers.
    *
    * @param  {Function} request Function used to make HTTP requests
-   * @param  {Boolean|Object} options Polling options
-   * @param  {Number} [options.timeout=10] Timeout in seconds for long polling
-   * @param  {Number} [options.interval=300] Interval between requests in milliseconds
+   * @param  {Object} options
+   * @param  {Boolean|Object} options.polling Polling options
+   * @param  {Number} [options.polling.timeout=10] Timeout in seconds for long polling
+   * @param  {Number} [options.polling.interval=300] Interval between requests in milliseconds
    * @param  {Function} callback Function for processing a new update
    * @see https://core.telegram.org/bots/api#getupdates
    */
-  constructor(request, options = {}, callback) {
-    /* eslint-disable no-param-reassign */
-    if (typeof options === 'function') {
-      callback = options;
-      options = {};
-    } else if (typeof options === 'boolean') {
-      options = {};
+  constructor(request, options, callback) {
+    if (typeof options.polling === 'boolean') {
+      options.polling = {};
     }
-    /* eslint-enable no-param-reassign */
-
     this.request = request;
-    this.options = options;
+    this.goptions = options;
+    this.options = options.polling;
     this.options.timeout = (typeof options.timeout === 'number') ? options.timeout : 10;
     this.options.interval = (typeof options.interval === 'number') ? options.interval : 300;
     this.callback = callback;
@@ -107,7 +103,28 @@ class TelegramBotPolling {
       })
       .catch(err => {
         debug('polling error: %s', err.message);
-        throw err;
+        /**
+         * We need to mark the already-processed items
+         * to avoid fetching them again once the application
+         * is restarted, or moves to next polling interval
+         * (in cases where unhandled rejections do not terminate
+         * the process).
+         * See https://github.com/yagop/node-telegram-bot-api/issues/36#issuecomment-268532067
+         */
+        if (!this.goptions.badRejection) {
+          throw err;
+        }
+        const opts = {
+          qs: {
+            // 'this._offset' holds ID of update that caused error
+            offset: this._offset + 1,
+            limit: 1,
+            timeout: 0,
+          },
+        };
+        return this.request('getUpdates', opts).then(() => {
+          throw err;
+        });
       })
       .finally(() => {
         if (this._abort) {
